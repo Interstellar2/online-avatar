@@ -1,0 +1,24 @@
+# online-avatar 数字人对话服务
+#
+# 启动:   docker compose up -d --build
+# 查看日志: docker compose logs -f
+# 停止:   docker compose down
+#
+# 注意: 需要在项目根目录创建 .env（参考 .env.example，至少填 DASHSCOPE_API_KEY），
+#       compose 会通过 env_file 注入容器。
+
+services:
+  online-avatar:
+    build: .
+    image: online-avatar:latest
+    container_name: online-avatar
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false  # 无 .env 也能起（echo 方案可用，cascade 需配 key）
+    environment:
+      # 容器内覆盖项：监听地址与 compose 映射保持一致
+      HOST: 0.0.0.0
+      PORT: 8000
+    restart: unless-stopped
