@@ -227,6 +227,40 @@ async def test_interrupt_drops_queued_turns():
     assert len(llm.queries) == 1  # 排队输入被丢弃，不产生第二轮
 
 
+async def test_opus_codec_end_to_end():
+    """opus 协商：上行 Opus 帧解码后喂 ASR，下行 PCM 编码为 Opus 帧下发。"""
+    from app.core.codecs import build_codec
+
+    transport = FakeTransport()
+    session = CascadeSession(
+        asr=EchoASR(trigger_seconds=0.1),
+        llm=EchoLLM(token_delay=0.001),
+        tts=EchoTTS(),
+        dialogue=Dialogue(system_prompt="测试"),
+        transport=transport,
+        codec="opus",
+        input_sample_rate=16000,
+    )
+
+    # 客户端侧：16k 静音 PCM 编码成 Opus 包上行
+    uplink = build_codec("opus", 16000)
+    silence = b"\x00\x00" * 1600  # 0.1s @16k
+    for _ in range(3):
+        for packet in uplink.encode(silence):
+            transport.send_client_bytes(packet)
+    await run_session_until_finished(transport, session)
+
+    jsons = transport.json_frames()
+    started = next(m for m in jsons if m["type"] == proto.TURN_STARTED)
+    assert started["codec"] == "opus"
+    # ASR 被成功触发（证明上行 Opus 帧已被正确解码为 PCM）
+    assert proto.ASR_FINAL in [m["type"] for m in jsons]
+    # 下行二进制帧应为 Opus 包：解回 PCM 校验可播放
+    downlink = build_codec("opus", 22050)
+    pcm = b"".join(downlink.decode(m.data) for m in transport.outgoing if m.kind == "bytes")
+    assert len(pcm) > 1000 and len(pcm) % 2 == 0
+
+
 class _SilentASR(EchoASR):
     """final_transcripts 立即结束的 ASR：模拟上游断流。"""
 

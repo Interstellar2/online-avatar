@@ -27,7 +27,9 @@ class CascadeSolutionBase:
     def _system_prompt(self, settings: Settings) -> str:
         raise NotImplementedError
 
-    async def handle(self, transport: Transport, session_id: str) -> None:
+    async def handle(
+        self, transport: Transport, session_id: str, codec: str = "pcm"
+    ) -> None:
         try:
             engines = self._build_engines(self._settings)
         except EngineError as exc:
@@ -40,8 +42,13 @@ class CascadeSolutionBase:
             dialogue=Dialogue(system_prompt=self._system_prompt(self._settings)),
             transport=transport,
             session_id=session_id,
+            codec=codec,
+            input_sample_rate=self._input_sample_rate(self._settings),
         )
         await session.run()
+
+    def _input_sample_rate(self, settings: Settings) -> int:
+        return settings.input_audio_sample_rate
 
 
 class CascadeSolution(CascadeSolutionBase):

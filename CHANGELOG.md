@@ -9,6 +9,10 @@
 
 ### Added
 
+- **Opus 音频编码协商**：连接 URL 加 `?codec=opus` 启用（缺省 PCM 透传），`turn_started` 新增 `codec` 字段确认下行编码；编解码在会话收发边缘经 `app/core/codecs.py`（PyAV/libopus，20ms 帧）完成，引擎协议不变；前端自动检测 WebCodecs 支持并回退，带宽降为约 1/10
+
+### Added
+
 - 可插拔方案架构：三层分离（`core/` 基础设施与引擎协议 → `solutions/` 方案注册表 → `ws/` 协议适配），支持在同一项目内对比多套数字人对话方案。
 - `cascade` 级联方案：ASR → LLM → TTS 级联实现（阿里云百炼）。
 - `echo` mock 方案：无需外部密钥即可运行的 mock 引擎，用于本地开发与测试。
@@ -30,5 +34,5 @@
 
 - 初始版本，内容同 [Unreleased]。
 
-[Unreleased]: https://github.com/your-org/online-avatar/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/your-org/online-avatar/releases/tag/v0.1.0
+[Unreleased]: https://github.com/hanniandong/online-avatar/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/hanniandong/online-avatar/releases/tag/v0.1.0

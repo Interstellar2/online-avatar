@@ -43,6 +43,8 @@ class FastAPITransport:
 async def avatar_endpoint(websocket: WebSocket, solution_name: str) -> None:
     await websocket.accept()
     settings = get_settings()
+    # 音频编码协商：?codec=opus 启用 Opus，缺省/未知值一律退回 PCM 透传
+    codec = websocket.query_params.get("codec", "pcm")
     try:
         solution = get_solution(solution_name, settings)
     except KeyError:
@@ -54,7 +56,9 @@ async def avatar_endpoint(websocket: WebSocket, solution_name: str) -> None:
         await websocket.close()
         return
     try:
-        await solution.handle(FastAPITransport(websocket), session_id=uuid.uuid4().hex)
+        await solution.handle(
+            FastAPITransport(websocket), session_id=uuid.uuid4().hex, codec=codec
+        )
     except WebSocketDisconnect:
         pass
     finally:

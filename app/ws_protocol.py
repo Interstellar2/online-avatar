@@ -51,8 +51,9 @@ def llm_token(text: str) -> dict:
     return {"type": LLM_TOKEN, "text": text}
 
 
-def turn_started(sample_rate: int) -> dict:
-    return {"type": TURN_STARTED, "sample_rate": sample_rate}
+def turn_started(sample_rate: int, codec: str = "pcm") -> dict:
+    # codec 告知前端如何解码后续二进制帧（"pcm" 透传 / "opus"）
+    return {"type": TURN_STARTED, "sample_rate": sample_rate, "codec": codec}
 
 
 def turn_finished() -> dict:

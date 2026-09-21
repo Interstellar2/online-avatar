@@ -15,14 +15,31 @@
 import asyncio
 import logging
 
+from app.core.codecs import build_codec
 from app.core.dialogue import Dialogue
 from app.core.engines import ASREngine, EngineSet, LLMEngine, TTSEngine
 from app.core.transport import Transport
 from app.solutions.cascade.notifier import SessionNotifier
 from app.solutions.cascade.shell import SessionShell
-from app.solutions.cascade.turn import TurnRunner
+from app.solutions.cascade.turn import AudioSink, TurnRunner
 
 logger = logging.getLogger(__name__)
+
+
+class _TransportAudioSink:
+    """把 TTS 的 PCM 分块经编码器成帧后发到传输层（帧式编码的 send/flush 适配）。"""
+
+    def __init__(self, codec, transport: Transport):
+        self._codec = codec
+        self._transport = transport
+
+    async def send(self, chunk: bytes) -> None:
+        for packet in self._codec.encode(chunk):
+            await self._transport.send_bytes(packet)
+
+    async def flush(self) -> None:
+        for packet in self._codec.flush():
+            await self._transport.send_bytes(packet)
 
 
 class CascadeSession:
@@ -38,6 +55,8 @@ class CascadeSession:
         dialogue: Dialogue,
         transport: Transport,
         session_id: str = "",
+        codec: str = "pcm",
+        input_sample_rate: int = 16000,
     ):
         self._asr = asr
         self._llm = llm
@@ -45,8 +64,18 @@ class CascadeSession:
         self._dialogue = dialogue
         self._transport = transport
         self._session_id = session_id
-        self._notifier = SessionNotifier(transport)
-        self._turn_runner = TurnRunner(llm, tts, dialogue, self._notifier)
+        # 编解码只发生在传输边缘：上行帧解码回 PCM 再喂 ASR，下行 PCM 编码后发出。
+        # 两侧采样率不同（麦克风 16k / TTS 22.05k），故各持一个实例
+        self._uplink_codec = build_codec(codec, input_sample_rate)
+        self._downlink_codec = build_codec(codec, tts.output_sample_rate)
+        self._notifier = SessionNotifier(transport, codec=codec)
+        self._turn_runner = TurnRunner(
+            llm,
+            tts,
+            dialogue,
+            self._notifier,
+            _TransportAudioSink(self._downlink_codec, transport),
+        )
         self._turn_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=self.MAX_QUEUED_TURNS)
         self._current_turn: asyncio.Task | None = None
         # ASR 中间结果（实时字幕）的异步发送任务引用，防止被 GC 回收
@@ -60,7 +89,7 @@ class CascadeSession:
             shell = SessionShell(
                 self._transport,
                 self._notifier,
-                on_bytes=self._asr.send_audio,
+                on_bytes=self._on_audio_frame,
                 on_text=self._enqueue_turn,
                 on_interrupt=self._handle_interrupt,
             )
@@ -87,6 +116,11 @@ class CascadeSession:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
     # ---------- 生产者 ----------
+
+    async def _on_audio_frame(self, data: bytes) -> None:
+        pcm = self._uplink_codec.decode(data)
+        if pcm:
+            await self._asr.send_audio(pcm)
 
     async def _asr_producer(self) -> None:
         async for text in self._asr.final_transcripts():

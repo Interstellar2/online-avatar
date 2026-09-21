@@ -10,8 +10,9 @@ from app.core.transport import Transport
 class SessionNotifier:
     """包装 Transport，提供语义化的会话通知方法。"""
 
-    def __init__(self, transport: Transport):
+    def __init__(self, transport: Transport, codec: str = "pcm"):
         self._transport = transport
+        self._codec = codec
 
     async def pong(self) -> None:
         await self._transport.send_json(proto.pong())
@@ -23,7 +24,7 @@ class SessionNotifier:
         await self._transport.send_json(proto.asr_final(text))
 
     async def turn_started(self, sample_rate: int) -> None:
-        await self._transport.send_json(proto.turn_started(sample_rate))
+        await self._transport.send_json(proto.turn_started(sample_rate, codec=self._codec))
 
     async def llm_token(self, token: str) -> None:
         await self._transport.send_json(proto.llm_token(token))

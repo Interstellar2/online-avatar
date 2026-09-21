@@ -14,6 +14,11 @@ from app.core.transport import Transport
 class Solution(Protocol):
     name: str
 
-    async def handle(self, transport: Transport, session_id: str) -> None:
-        """接管一条 WS 连接直到关闭，内部完成 ASR/LLM/TTS 的全部编排。"""
+    async def handle(
+        self, transport: Transport, session_id: str, codec: str = "pcm"
+    ) -> None:
+        """接管一条 WS 连接直到关闭，内部完成 ASR/LLM/TTS 的全部编排。
+
+        codec：WS 二进制帧的音频编码（"pcm" 透传 / "opus"），由连接协商（URL query）传入。
+        """
         ...

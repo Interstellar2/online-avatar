@@ -14,7 +14,8 @@ export interface PongMessage { type: 'pong' }
 export interface AsrPartialMessage { type: 'asr_partial'; text: string }
 export interface AsrFinalMessage { type: 'asr_final'; text: string }
 export interface LlmTokenMessage { type: 'llm_token'; text: string }
-export interface TurnStartedMessage { type: 'turn_started'; sample_rate: number }
+// codec 告知本轮下行二进制帧的编码（pcm=PCM16 小端，opus=每帧一个 Opus 包）
+export interface TurnStartedMessage { type: 'turn_started'; sample_rate: number; codec: 'pcm' | 'opus' }
 export interface TurnFinishedMessage { type: 'turn_finished' }
 export interface ErrorMessage { type: 'error'; code: string; message: string }
 export type ServerMessage =

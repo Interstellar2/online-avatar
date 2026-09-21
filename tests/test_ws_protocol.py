@@ -21,6 +21,11 @@ def test_turn_started_carries_sample_rate():
     assert proto.turn_started(24000)["sample_rate"] == 24000
 
 
+def test_turn_started_carries_codec():
+    assert proto.turn_started(22050)["codec"] == "pcm"  # 缺省向后兼容
+    assert proto.turn_started(22050, codec="opus")["codec"] == "opus"
+
+
 def test_loads_invalid_json():
     assert proto.loads("not-json") == {}
     assert proto.loads('["list"]') == {}

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAvatarSession } from '../src/composables/useAvatarSession'
-import { installFakeAudioContext, installFakeWebSocket, mockFetchJson } from './helpers'
+import { installFakeAudioContext, installFakeGetUserMedia, installFakeWebSocket, mockFetchJson } from './helpers'
 
 let FakeWS: ReturnType<typeof installFakeWebSocket>
 let FakeAudio: ReturnType<typeof installFakeAudioContext>
@@ -22,9 +22,9 @@ afterEach(() => {
 })
 
 describe('useAvatarSession 旅程', () => {
-  it('连接后收到服务端事件，状态与消息流正确演化', () => {
+  it('连接后收到服务端事件，状态与消息流正确演化', async () => {
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     const ws = lastWs()
     expect(ws.url).toContain('/ws/avatar/cascade')
 
@@ -59,9 +59,9 @@ describe('useAvatarSession 旅程', () => {
     expect(s.turnActive.value).toBe(false)
   })
 
-  it('新一轮 turn_started 开启新的机器人条目', () => {
+  it('新一轮 turn_started 开启新的机器人条目', async () => {
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     const ws = lastWs()
     ws.simulateOpen()
 
@@ -75,9 +75,9 @@ describe('useAvatarSession 旅程', () => {
     expect(bots.map((b) => b.text)).toEqual(['第一轮回答', '第二轮回答'])
   })
 
-  it('error 消息进入消息流', () => {
+  it('error 消息进入消息流', async () => {
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     lastWs().simulateOpen()
     lastWs().simulateJson({ type: 'error', code: 'LLM_ERROR', message: 'boom' })
     const err = s.entries.value.find((e) => e.role === 'error')
@@ -85,9 +85,9 @@ describe('useAvatarSession 旅程', () => {
     expect(err?.text).toContain('boom')
   })
 
-  it('sendText / interrupt 发送正确协议消息', () => {
+  it('sendText / interrupt 发送正确协议消息', async () => {
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     const ws = lastWs()
     ws.simulateOpen()
 
@@ -98,18 +98,18 @@ describe('useAvatarSession 旅程', () => {
     expect(sent[1]).toEqual({ type: 'interrupt' })
   })
 
-  it('sendText 空内容不发送', () => {
+  it('sendText 空内容不发送', async () => {
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     const ws = lastWs()
     ws.simulateOpen()
     s.sendText('   ')
     expect(ws.sentJson()).toHaveLength(0)
   })
 
-  it('断开后状态复位', () => {
+  it('断开后状态复位', async () => {
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     const ws = lastWs()
     ws.simulateOpen()
     ws.simulateJson({ type: 'turn_started', sample_rate: 22050 })
@@ -122,9 +122,9 @@ describe('useAvatarSession 旅程', () => {
     expect(s.asrDraft.value).toBe('')
   })
 
-  it('interrupt 停止本地播放已入队的音频', () => {
+  it('interrupt 停止本地播放已入队的音频', async () => {
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     const ws = lastWs()
     ws.simulateOpen()
 
@@ -139,9 +139,9 @@ describe('useAvatarSession 旅程', () => {
     expect(ws.sentJson().at(-1)).toEqual({ type: 'interrupt' })
   })
 
-  it('断开后停止本地播放', () => {
+  it('断开后停止本地播放', async () => {
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     const ws = lastWs()
     ws.simulateOpen()
 
@@ -153,10 +153,10 @@ describe('useAvatarSession 旅程', () => {
     expect(ctx.stoppedSources).toHaveLength(1)
   })
 
-  it('心跳随连接启停，断开后不再发送', () => {
+  it('心跳随连接启停，断开后不再发送', async () => {
     vi.useFakeTimers()
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     const ws = lastWs()
 
     // 未连接时不发心跳
@@ -174,16 +174,23 @@ describe('useAvatarSession 旅程', () => {
   })
 
   it('麦克风帧以二进制发送', async () => {
-    // jsdom 无 getUserMedia/音频节点：最小桩验证帧发送通路
+    // 桩住 getUserMedia 与音频节点，驱动 onaudioprocess 验证采集→发送全链路
     const s = useAvatarSession()
-    s.connect()
+    await s.connect()
     const ws = lastWs()
     ws.simulateOpen()
 
-    // 直接调用 mic 回调等价路径：onFrame 已绑定 send
-    // 通过 toggleMic 的失败路径验证不崩溃，再手动触发内部回调不可行，
-    // 这里验证 send 二进制帧的通路：模拟采集回调持有的 ws 引用
-    // （useMicCapture 的 onFrame 闭包在模块内，集成级验证在 e2e 由真实浏览器完成）
-    expect(ws.readyState).toBe(FakeWS.OPEN)
+    installFakeGetUserMedia()
+    await s.toggleMic()
+    expect(s.listening.value).toBe(true)
+
+    // 48k 浮点输入 → 重采样为 16k 整数帧（4800 / 3 = 1600 采样）
+    const ctx = FakeAudio.instances[0]
+    ctx.createdProcessors[0].onaudioprocess!({
+      inputBuffer: { getChannelData: () => new Float32Array(4800).fill(0.5) },
+    })
+    const bins = ws.sentBinary()
+    expect(bins).toHaveLength(1)
+    expect(new Int16Array(bins[0])).toHaveLength(1600)
   })
 })

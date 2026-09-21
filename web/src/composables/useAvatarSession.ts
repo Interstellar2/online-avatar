@@ -3,10 +3,16 @@
 
 import { getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue'
 import type { ChatEntry, ClientMessage, ServerMessage, SolutionName } from '../types'
+import { createOpusDecoder, createOpusEncoder, isOpusSupported } from '../audio/opus'
+import type { OpusDecoderHandle, OpusEncoderHandle } from '../audio/opus'
+import { resampleInt16 } from '../audio/resample'
 import { useAudioPlayer } from './useAudioPlayer'
 import { useMicCapture } from './useMicCapture'
 
 export type ConnStatus = 'disconnected' | 'connected'
+
+// 麦克风采集固定 16k（与 useMicCapture 的 TARGET_RATE 对齐），仅作 encode 的源采样率标注
+const MIC_SAMPLE_RATE = 16000
 
 export function useAvatarSession() {
   const status = ref<ConnStatus>('disconnected')
@@ -21,9 +27,17 @@ export function useAvatarSession() {
   let entrySeq = 0
   let botEntryId: number | null = null // 正在流式追加的机器人条目
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  let negotiatedCodec: 'pcm' | 'opus' = 'pcm' // 连接协商结果，决定上行是否编码
+  let encoder: OpusEncoderHandle | null = null // 上行编码器，随连接生命周期创建/关闭
+  let decoder: OpusDecoderHandle | null = null // 下行解码器，会话级一个、跨轮复用
+  let turnCodec: 'pcm' | 'opus' = 'pcm' // 本轮下行帧编码，以 turn_started 为准
+  let turnSampleRate = 22050 // 本轮下行目标采样率，解码回调里重采样要用
 
   const player = useAudioPlayer()
-  const mic = useMicCapture((pcm) => sendRaw(pcm.buffer))
+  const mic = useMicCapture((pcm) => {
+    if (encoder) encoder.encode(pcm, MIC_SAMPLE_RATE) // opus：编码器输出回调里按包发送
+    else sendRaw(pcm.buffer)
+  })
 
   // 统一发送入口：未连接时静默丢弃（心跳、麦克风帧都会高频走到这里）
   const sendRaw = (data: string | ArrayBufferLike) => {
@@ -59,11 +73,17 @@ export function useAvatarSession() {
     )
   }
 
-  const connect = () => {
+  const connect = async () => {
     if (ws) disconnect()
+    // 能力检测必须先于建连：结果决定 WS URL 是否带 codec 协商参数
+    negotiatedCodec = (await isOpusSupported()) ? 'opus' : 'pcm'
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    ws = new WebSocket(`${proto}://${location.host}/ws/avatar/${solution.value}`)
+    const codecQuery = negotiatedCodec === 'opus' ? '?codec=opus' : ''
+    ws = new WebSocket(`${proto}://${location.host}/ws/avatar/${solution.value}${codecQuery}`)
     ws.binaryType = 'arraybuffer'
+    if (negotiatedCodec === 'opus') {
+      encoder = createOpusEncoder((data) => sendRaw(data))
+    }
 
     ws.onopen = () => {
       status.value = 'connected'
@@ -77,6 +97,10 @@ export function useAvatarSession() {
       stopHeartbeat()
       player.stop() // 断开后不应继续播服务端余音
       mic.stop()
+      encoder?.close()
+      encoder = null
+      decoder?.close()
+      decoder = null
       listening.value = false
       push('system', '连接已断开')
       ws = null
@@ -84,6 +108,8 @@ export function useAvatarSession() {
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
         handleJson(JSON.parse(ev.data) as ServerMessage)
+      } else if (turnCodec === 'opus' && decoder) {
+        decoder.decode(ev.data) // opus 帧先进解码器，回调里重采样后送播放器
       } else {
         player.play(ev.data)
       }
@@ -106,11 +132,22 @@ export function useAvatarSession() {
       case 'llm_token':
         appendBot(msg.text)
         break
-      case 'turn_started':
+      case 'turn_started': {
         player.reset(msg.sample_rate)
+        turnSampleRate = msg.sample_rate
+        // 以服务端 turn_started 为准（兼容协商 opus 但本轮回 pcm 的异常情况）；
+        // 老版本服务端未带 codec 字段时按 pcm 透传
+        turnCodec = msg.codec ?? 'pcm'
+        if (turnCodec === 'opus' && !decoder) {
+          // 解码器会话级一个、跨轮复用；输出恒为 48k，重采样到本轮目标采样率再播
+          decoder = createOpusDecoder((pcm, srcRate) => {
+            player.play(resampleInt16(pcm, srcRate, turnSampleRate).buffer)
+          })
+        }
         botEntryId = null // 新一轮重新开条目
         turnActive.value = true
         break
+      }
       case 'turn_finished':
         turnActive.value = false
         botEntryId = null

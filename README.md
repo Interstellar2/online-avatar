@@ -12,7 +12,7 @@
 - **打断（Barge-in）**：随时打断当前播报，立即开始新一轮对话
 - **多轮上下文**：自动维护对话历史（成对截断防拆散）
 - **可插拔架构**：引擎层（ASR/LLM/TTS）与方案层（Solution）统一抽象，支持多种对话方案并存对比（级联 / omni 端到端 / 第三方实时方案）
-- **全链路可测**：后端 61 个 pytest（含真实 WS 栈旅程测试）+ 前端 28 个 vitest，无需密钥即可跑通
+- **全链路可测**：后端 69 个 pytest（含真实 WS 栈旅程测试）+ 前端 35 个 vitest，无需密钥即可跑通
 - **一键部署**：Docker Compose 单容器交付（后端 + 前端产物 + 健康检查）
 
 ## 技术栈
@@ -119,11 +119,14 @@ cd .. && docker compose up -d --build
 
 一条连接，二进制帧与 JSON 文本帧混用。
 
+**音频编码协商**：连接 URL 加 `?codec=opus` 启用 Opus 编码（20ms/帧，带宽约为 PCM 的 1/10，
+前端自动检测 WebCodecs 支持并回退 PCM）；缺省为 `pcm` 透传。编码方式由服务端随 `turn_started` 确认。
+
 客户端 → 服务端：
 
 | 帧 | 说明 |
 |---|---|
-| 二进制帧 | 音频，PCM16 单声道 16kHz（建议 ~100ms/帧） |
+| 二进制帧 | 音频帧；`pcm` 模式为 PCM16 单声道 16kHz（建议 ~100ms/帧），`opus` 模式为一帧一个 Opus 包 |
 | `{"type":"ping"}` | 心跳 |
 | `{"type":"interrupt"}` | 打断当前播报 |
 | `{"type":"text","content":"..."}` | 文字直发（跳过 ASR，调试用） |
@@ -132,12 +135,12 @@ cd .. && docker compose up -d --build
 
 | 帧 | 说明 |
 |---|---|
-| 二进制帧 | 合成音频，PCM16 单声道，采样率见 `turn_started.sample_rate` |
+| 二进制帧 | 合成音频帧；编码方式见 `turn_started.codec`，采样率见 `turn_started.sample_rate` |
 | `{"type":"pong"}` | 心跳应答 |
 | `{"type":"asr_partial","text":"..."}` | 识别中间结果 |
 | `{"type":"asr_final","text":"..."}` | 判停后的最终识别结果 |
 | `{"type":"llm_token","text":"..."}` | LLM 增量 token |
-| `{"type":"turn_started","sample_rate":22050}` | 本轮回答开始（前端重置播放队列） |
+| `{"type":"turn_started","sample_rate":22050,"codec":"opus"}` | 本轮回答开始（前端重置播放队列，codec 告知下行帧编码） |
 | `{"type":"turn_finished"}` | 本轮回答结束 |
 | `{"type":"error","code":"...","message":"..."}` | 错误 |
 
@@ -156,7 +159,7 @@ cd .. && docker compose up -d --build
 
 ## 测试
 
-后端（pytest，无需任何外部服务/密钥，61 个用例）：
+后端（pytest，无需任何外部服务/密钥，69 个用例）：
 
 ```bash
 pytest -q
@@ -165,7 +168,7 @@ pytest -q
 # 旅程测试：真实 HTTP/WS 栈 —— 文字轮 / 音频轮 / 打断 / 多轮上下文 / 心跳 / 异常分支
 ```
 
-前端（vitest + jsdom，28 个用例）：
+前端（vitest + jsdom，35 个用例）：
 
 ```bash
 cd web && npm run test

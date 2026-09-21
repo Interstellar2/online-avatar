@@ -8,7 +8,7 @@
 
 - Python ≥ 3.11，依赖装在项目内 `.venv`（`pip install -e '.[dev]'`）。
 - 启动：`.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`；测试页在 `/`。
-- 测试：后端 `.venv/bin/pytest -q`（61 个，mock 引擎 + FakeWS 协议单测 + TestClient 旅程测试，无需密钥）；前端 `cd web && npm run test`（vitest，28 个）。新增功能必须带测试：纯逻辑单测 + 能走真实栈的旅程测试优先走 TestClient/FakeTransport（共享假件在 `tests/fakes.py`）。
+- 测试：后端 `.venv/bin/pytest -q`（69 个，mock 引擎 + FakeWS 协议单测 + TestClient 旅程测试，无需密钥）；前端 `cd web && npm run test`（vitest，35 个）。新增功能必须带测试：纯逻辑单测 + 能走真实栈的旅程测试优先走 TestClient/FakeTransport（共享假件在 `tests/fakes.py`）。
 - 前端：Vue 3 + Vite + TS，位于 `web/`；`npm run dev`（代理到 8000）/ `npm run build`（产物由后端托管）。
 - Docker：`docker compose up -d --build`（前端需先 `npm run build`，产物 COPY 进镜像；未用 node 多阶段——网络拉不到 node 基础镜像，见 Dockerfile 注释）。
 - 配置：全部走环境变量 / `.env`（见 `.env.example`）；**密钥不进代码库**。
@@ -22,7 +22,7 @@
 - 级联类方案继承 `CascadeSolutionBase`（cascade/__init__.py），只提供引擎工厂与 system prompt；端到端（omni 类）模型不实现引擎协议，直接实现 `solutions/base.py` 的 `Solution` 协议（可复用 `SessionShell`）。
 - 方案层不得直接依赖 FastAPI 的 WebSocket 对象，只面向 `core/transport.py` 的 `Transport` 协议编程（可测试性）；协议消息一律经 `SessionNotifier` 发送。
 - 前后端消息类型改动需同步：`app/ws_protocol.py`、`web/src/types.ts`、`README.md` 协议表。
-- WS 上传输音频一律用二进制帧（PCM16），控制消息用 JSON 文本帧，不要引入 base64。
+- WS 上音频一律用二进制帧，控制消息用 JSON 文本帧，不要引入 base64。音频编码经 URL query `?codec=opus` 协商（缺省 pcm 透传），编码方式由服务端随 `turn_started.codec` 确认；编解码只在会话收发边缘发生（`app/core/codecs.py`，进出引擎的永远是 PCM16），Opus 用 PyAV（静态捆绑 ffmpeg，无系统依赖）。
 
 ## 代码风格
 

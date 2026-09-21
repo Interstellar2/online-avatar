@@ -10,6 +10,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from typing import Protocol
 
 from app.core.dialogue import Dialogue
 from app.core.engines import LLMEngine, TTSEngine
@@ -17,6 +18,14 @@ from app.core.sentence import SentenceSplitter
 from app.solutions.cascade.notifier import SessionNotifier
 
 logger = logging.getLogger(__name__)
+
+
+class AudioSink(Protocol):
+    """轮次产出的 PCM 音频出口：send 逐块送入，flush 在轮次结束时冲刷尾帧。"""
+
+    async def send(self, chunk: bytes) -> None: ...
+
+    async def flush(self) -> None: ...
 
 
 @dataclass
@@ -41,11 +50,13 @@ class TurnRunner:
         tts: TTSEngine,
         dialogue: Dialogue,
         notifier: SessionNotifier,
+        audio_out: AudioSink,
     ):
         self._llm = llm
         self._tts = tts
         self._dialogue = dialogue
         self._notifier = notifier
+        self._audio_out = audio_out
 
     async def run(self, user_text: str) -> None:
         state = TurnState(start_ts=time.monotonic())
@@ -62,6 +73,8 @@ class TurnRunner:
                 if not t.done():
                     t.cancel()
             await asyncio.gather(llm_task, tts_task, return_exceptions=True)
+            # 冲刷编码器尾帧（补零凑满最后一帧），保证最后几句不丢
+            await self._audio_out.flush()
             # 出错/打断导致回复不完整时，已流式下发给前端的部分也入库，
             # 保持对话历史与前端展示一致
             if state.reply:
@@ -104,7 +117,7 @@ class TurnRunner:
                             "[TURN-LATENCY] 判停/输入 → 首音频帧已下发: %.0fms",
                             (time.monotonic() - state.start_ts) * 1000,
                         )
-                    await self._notifier.send_bytes(chunk)
+                    await self._audio_out.send(chunk)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 错误透传给前端
